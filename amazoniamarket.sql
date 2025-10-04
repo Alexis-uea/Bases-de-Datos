@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 30-09-2025 a las 23:19:31
+-- Tiempo de generación: 04-10-2025 a las 04:28:02
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -20,6 +20,52 @@ SET time_zone = "+00:00";
 --
 -- Base de datos: `amazoniamarket`
 --
+
+DELIMITER $$
+--
+-- Procedimientos
+--
+CREATE DEFINER=`root`@`localhost` PROCEDURE `actualizar_precio_producto` (IN `p_codigo_producto` VARCHAR(20), IN `p_nuevo_precio` DECIMAL(10,2))   BEGIN
+    DECLARE v_precio_anterior DECIMAL(10,2);
+    DECLARE v_datos_anteriores TEXT;
+    DECLARE v_datos_nuevos TEXT;
+
+    -- Obtener el precio actual
+    SELECT precio_unitario INTO v_precio_anterior
+    FROM producto
+    WHERE codigo_producto = p_codigo_producto;
+
+    -- Actualizar el precio
+    UPDATE producto
+    SET precio_unitario = p_nuevo_precio
+    WHERE codigo_producto = p_codigo_producto;
+
+    -- Construir datos para el log (sin JSON)
+    SET v_datos_anteriores = CONCAT('Precio anterior: ', v_precio_anterior);
+    SET v_datos_nuevos = CONCAT('Precio nuevo: ', p_nuevo_precio);
+
+    -- Registrar en log_cambios
+    INSERT INTO log_cambios (
+        tabla_afectada,
+        operacion,
+        clave_primaria,
+        datos_anteriores,
+        datos_nuevos,
+        fecha_evento,
+        usuario
+    )
+    VALUES (
+        'producto',
+        'UPDATE',
+        p_codigo_producto,
+        v_datos_anteriores,
+        v_datos_nuevos,
+        NOW(),
+        CURRENT_USER()
+    );
+END$$
+
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -70,6 +116,18 @@ INSERT INTO `detalleventa` (`id_detalle`, `id_venta`, `codigo_producto`, `cantid
 ('D007', 1005, 'P003', 1),
 ('D008', 1006, 'P004', 2),
 ('D009', 1007, 'P008', 1);
+
+--
+-- Disparadores `detalleventa`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_descuento_stock` AFTER INSERT ON `detalleventa` FOR EACH ROW BEGIN
+    UPDATE producto
+    SET stock_disponible = stock_disponible - NEW.cantidad
+    WHERE codigo_producto = NEW.codigo_producto;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -148,14 +206,71 @@ CREATE TABLE `producto` (
 INSERT INTO `producto` (`codigo_producto`, `nombre`, `categoria`, `marca`, `precio_unitario`, `unidad_medida`, `stock_disponible`) VALUES
 ('P001', 'Manzana Fuji', 'Alimentos', 'FreshFruit', 0.50, 'kg', 100),
 ('P002', 'Licuadora X100', 'Electrodomésticos', 'HomeTech', 35.00, 'unidad', 20),
-('P003', 'Leche Entera 1L', 'Alimentos', 'LacteosPlus', 1.20, 'unidad', 50),
+('P003', 'Leche Entera 1L', 'Alimentos', 'LacteosPlus', 1.50, 'unidad', 50),
 ('P004', 'Arroz Integral 1kg', 'Alimentos', 'GrainCo', 2.00, 'unidad', 30),
 ('P005', 'Café Molido', 'Alimentos', 'CafeExpress', 4.50, 'unidad', 15),
 ('P006', 'Jabón en barra', 'Higiene', 'CleanHome', 0.80, 'unidad', 40),
 ('P007', 'Televisor 42\"', 'Electrodomésticos', 'VisionPlus', 300.00, 'unidad', 5),
 ('P008', 'Papel Higiénico', 'Higiene', 'SoftTouch', 0.90, 'unidad', 100),
 ('P009', 'Cereal Integral', 'Alimentos', 'HealthyLife', 3.20, 'unidad', 10),
-('P010', 'Detergente Líquido', 'Higiene', 'CleanHome', 2.50, 'unidad', 25);
+('P010', 'Detergente Líquido', 'Higiene', 'CleanHome', 2.50, 'unidad', 20);
+
+--
+-- Disparadores `producto`
+--
+DELIMITER $$
+CREATE TRIGGER `log_producto_delete` AFTER DELETE ON `producto` FOR EACH ROW BEGIN
+  INSERT INTO log_cambios (
+    tabla_afectada, operacion, clave_primaria, datos_anteriores
+  )
+  VALUES (
+    'producto', 'DELETE', OLD.codigo_producto,
+    CONCAT('{"nombre":"', OLD.nombre,
+           '", "categoria":"', OLD.categoria,
+           '", "marca":"', OLD.marca,
+           '", "precio_unitario":', OLD.precio_unitario,
+           ', "stock_disponible":', OLD.stock_disponible, '}')
+  );
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `log_producto_insert` AFTER INSERT ON `producto` FOR EACH ROW BEGIN
+  INSERT INTO log_cambios (
+    tabla_afectada, operacion, clave_primaria, datos_nuevos
+  )
+  VALUES (
+    'producto', 'INSERT', NEW.codigo_producto,
+    CONCAT('{"nombre":"', NEW.nombre,
+           '", "categoria":"', NEW.categoria,
+           '", "marca":"', NEW.marca,
+           '", "precio_unitario":', NEW.precio_unitario,
+           ', "stock_disponible":', NEW.stock_disponible, '}')
+  );
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `log_producto_update` AFTER UPDATE ON `producto` FOR EACH ROW BEGIN
+  INSERT INTO log_cambios (
+    tabla_afectada, operacion, clave_primaria, datos_anteriores, datos_nuevos
+  )
+  VALUES (
+    'producto', 'UPDATE', NEW.codigo_producto,
+    CONCAT('{"nombre":"', OLD.nombre,
+           '", "categoria":"', OLD.categoria,
+           '", "marca":"', OLD.marca,
+           '", "precio_unitario":', OLD.precio_unitario,
+           ', "stock_disponible":', OLD.stock_disponible, '}'),
+    CONCAT('{"nombre":"', NEW.nombre,
+           '", "categoria":"', NEW.categoria,
+           '", "marca":"', NEW.marca,
+           '", "precio_unitario":', NEW.precio_unitario,
+           ', "stock_disponible":', NEW.stock_disponible, '}')
+  );
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -184,7 +299,7 @@ INSERT INTO `venta` (`id_venta`, `fecha_hora`, `total`, `subtotal`, `iva`, `cedu
 (1004, '2025-08-16 17:20:00', 25.00, 22.50, '2.50', '1818181818', 103),
 (1005, '2025-08-05 10:00:00', 3.00, 2.75, '0.25', '1717171717', 102),
 (1006, '2025-08-10 14:30:00', 5.00, 4.50, '0.50', '1818181818', 103),
-(1007, '2025-08-18 16:00:00', 2.00, 1.80, '0.20', '1717171717', 101);
+(1007, '2025-09-13 16:00:00', 2.00, 1.80, '0.20', '1717171717', 101);
 
 --
 -- Índices para tablas volcadas
